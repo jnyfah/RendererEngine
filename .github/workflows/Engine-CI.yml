@@ -16,10 +16,11 @@ jobs:
   windows:
     needs: clang-format
     uses: ./.github/workflows/windows-build.yml
+    with:
+      targetFramework: net8.0
 
   macOS:
     needs: clang-format
     uses: ./.github/workflows/macOS-build.yml
-
-  # linux:
-  #   uses: ./.github/workflows/linux-build.yml
+    with:
+      targetFramework: net8.0
