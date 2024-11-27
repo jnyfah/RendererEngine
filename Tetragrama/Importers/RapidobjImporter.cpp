@@ -7,22 +7,19 @@
 
 namespace Tetragrama::Importers
 {
-    RapidobjImporter::RapidobjImporter() {}
+    RapidobjImporter::RapidobjImporter() = default;
 
-    RapidobjImporter::~RapidobjImporter() {}
+    RapidobjImporter::~RapidobjImporter() = default;
 
     std::future<void> RapidobjImporter::ImportAsync(std::string_view filename, ImportConfiguration config)
     {
-        std::filesystem::path obj_path = filename.data();
-        m_base_dir                     = obj_path.parent_path(); // Save the base directory
-
         ThreadPoolHelper::Submit([this, path = std::string(filename.data()), config] {
             {
                 std::unique_lock l(m_mutex);
                 m_is_importing = true;
             }
+            auto result = rapidobj::ParseFile(path);
 
-            rapidobj::Result result = rapidobj::ParseFile(path);
             if (result.error)
             {
                 if (m_error_callback)
@@ -41,7 +38,7 @@ namespace Tetragrama::Importers
                 /*
                  * Serialization of ImporterData
                  */
-                ZENGINE_CORE_INFO("Serializing model...")
+                REPORT_LOG("Serializing model...")
                 SerializeImporterData(import_data, config);
 
                 if (m_complete_callback)
@@ -59,17 +56,10 @@ namespace Tetragrama::Importers
 
     void RapidobjImporter::PreprocessMesh(rapidobj::Result& result)
     {
-        if (!rapidobj::Triangulate(result))
-        {
-            ZENGINE_CORE_INFO("Cannot triangulate model...")
-        }
-        // Step 1: Generate normals if they don't exist
+        // Generate normals if they don't exist
         if (result.attributes.normals.empty())
         {
-            ZENGINE_CORE_INFO("Generating normals...");
             rapidobj::Array<float> normals(result.attributes.positions.size());
-
-            // Initialize normals to zero
             for (size_t i = 0; i < normals.size(); ++i)
             {
                 normals[i] = 0.0f;
@@ -96,9 +86,7 @@ namespace Tetragrama::Importers
                         result.attributes.positions[idx2.position_index * 3 + 1],
                         result.attributes.positions[idx2.position_index * 3 + 2]);
 
-                    glm::vec3 edge1  = v1 - v0;
-                    glm::vec3 edge2  = v2 - v0;
-                    glm::vec3 normal = glm::cross(edge1, edge2);
+                    glm::vec3 normal = glm::cross(v1 - v0, v2 - v0);
 
                     if (glm::dot(normal, normal) > 0.0f)
                     {
@@ -119,24 +107,21 @@ namespace Tetragrama::Importers
                 glm::vec3 n(normals[i], normals[i + 1], normals[i + 2]);
                 if (glm::dot(n, n) > 0.0f)
                 {
-                    n              = glm::normalize(n);
-                    normals[i]     = n.x;
-                    normals[i + 1] = n.y;
-                    normals[i + 2] = n.z;
+                    n = glm::normalize(n);
                 }
                 else
                 {
-                    // Default to "up" vector
-                    normals[i]     = 0.0f;
-                    normals[i + 1] = 1.0f;
-                    normals[i + 2] = 0.0f;
+                    n = glm::vec3(0.0f, 1.0f, 0.0f);
                 }
+                normals[i]     = n.x;
+                normals[i + 1] = n.y;
+                normals[i + 2] = n.z;
             }
 
             result.attributes.normals = std::move(normals);
         }
 
-        // Step 2: Generate texture coordinates if they don't exist
+        // Generate texture coordinates if they don't exist
         if (result.attributes.texcoords.empty())
         {
             ZENGINE_CORE_INFO("Generating default UV coordinates...");
@@ -153,7 +138,6 @@ namespace Tetragrama::Importers
 
             glm::vec3 size = max_pos - min_pos;
 
-            // Ensure the UV array is the correct size
             rapidobj::Array<float> texcoords(result.attributes.positions.size() / 3 * 2);
 
             for (size_t i = 0; i < result.attributes.positions.size(); i += 3)
@@ -167,6 +151,13 @@ namespace Tetragrama::Importers
 
             result.attributes.texcoords = std::move(texcoords);
         }
+        // Triangulate
+        if (!rapidobj::Triangulate(result))
+        {
+            REPORT_LOG("Cannot triangulate model...")
+        }
+
+        REPORT_LOG("Preprocessing complete.");
     }
 
     void RapidobjImporter::ExtractMeshes(const rapidobj::Result& result, ImporterData& importer_data)
@@ -176,7 +167,7 @@ namespace Tetragrama::Importers
 
         if (shapes.empty() || attributes.positions.empty())
         {
-            ZENGINE_CORE_INFO("No shapes or vertices found in the OBJ file.");
+            REPORT_LOG("No shapes or vertices found in the OBJ file.");
             return;
         }
 
@@ -185,94 +176,109 @@ namespace Tetragrama::Importers
         for (size_t shape_idx = 0; shape_idx < shapes.size(); ++shape_idx)
         {
             const auto& shape = shapes[shape_idx];
-            ZENGINE_CORE_INFO(fmt::format("Processing shape {}/{}: {}", shape_idx + 1, shapes.size(), !shape.name.empty() ? shape.name : "<unnamed>").c_str());
 
-            // Track mesh statistics
-            uint32_t vertex_count{0};
-            uint32_t index_count{0};
+            std::unordered_map<VertexData, uint32_t> unique_vertices;
+            const size_t                             face_count = shape.mesh.indices.size() / 3;
 
-            // Process each face
-            for (size_t face = 0; face < shape.mesh.indices.size(); face += 3)
+            for (size_t f = 0; f < face_count; ++f)
             {
                 for (size_t v = 0; v < 3; ++v)
                 {
-                    const auto& index = shape.mesh.indices[face + v];
+                    const auto& index = shape.mesh.indices[f * 3 + v];
+                    VertexData  vertex{};
 
-                    importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3]);
-                    importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3 + 1]);
-                    importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3 + 2]);
-                    importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3]);
-                    importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3 + 1]);
-                    importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3 + 2]);
-                    importer_data.Scene.Vertices.push_back(attributes.texcoords[index.texcoord_index * 2]);
-                    importer_data.Scene.Vertices.push_back(attributes.texcoords[index.texcoord_index * 2 + 1]);
+                    const size_t pos_idx = index.position_index * 3;
+                    vertex.px            = attributes.positions[pos_idx];
+                    vertex.py            = attributes.positions[pos_idx + 1];
+                    vertex.pz            = attributes.positions[pos_idx + 2];
 
-                    // Add index
-                    importer_data.Scene.Indices.push_back(importer_data.VertexOffset + vertex_count);
-                    vertex_count++;
-                    index_count++;
+                    const size_t norm_idx = index.normal_index * 3;
+                    vertex.nx             = attributes.normals[norm_idx];
+                    vertex.ny             = attributes.normals[norm_idx + 1];
+                    vertex.nz             = attributes.normals[norm_idx + 2];
+
+                    const size_t tex_idx = index.texcoord_index * 2;
+                    vertex.u             = attributes.texcoords[tex_idx];
+                    vertex.v             = attributes.texcoords[tex_idx + 1];
+
+                    // Add to unique_vertices or reuse
+                    auto     it = unique_vertices.find(vertex);
+                    uint32_t vertex_index;
+
+                    if (it != unique_vertices.end())
+                    {
+                        vertex_index = it->second;
+                    }
+                    else
+                    {
+                        vertex_index            = static_cast<uint32_t>(unique_vertices.size());
+                        unique_vertices[vertex] = vertex_index;
+
+                        importer_data.Scene.Vertices.insert(
+                            importer_data.Scene.Vertices.end(), {vertex.px, vertex.py, vertex.pz, vertex.nx, vertex.ny, vertex.nz, vertex.u, vertex.v});
+                    }
+
+                    importer_data.Scene.Indices.push_back(importer_data.VertexOffset + vertex_index);
                 }
             }
 
-            // Create mesh entry
             MeshVNext& mesh           = importer_data.Scene.Meshes.emplace_back();
-            mesh.VertexCount          = vertex_count;
+            mesh.VertexCount          = static_cast<uint32_t>(unique_vertices.size());
             mesh.VertexOffset         = importer_data.VertexOffset;
-            mesh.VertexUnitStreamSize = sizeof(float) * (3 + 3 + 2); // pos(3) + normal(3) + uv(2)
+            mesh.VertexUnitStreamSize = sizeof(float) * (3 + 3 + 2);
             mesh.StreamOffset         = mesh.VertexUnitStreamSize * mesh.VertexOffset;
             mesh.IndexOffset          = importer_data.IndexOffset;
-            mesh.IndexCount           = index_count;
+            mesh.IndexCount           = static_cast<uint32_t>(shape.mesh.indices.size());
             mesh.IndexUnitStreamSize  = sizeof(uint32_t);
             mesh.IndexStreamOffset    = mesh.IndexUnitStreamSize * mesh.IndexOffset;
             mesh.TotalByteSize        = (mesh.VertexCount * mesh.VertexUnitStreamSize) + (mesh.IndexCount * mesh.IndexUnitStreamSize);
 
-            // Update offsets for next mesh
-            importer_data.VertexOffset += vertex_count;
-            importer_data.IndexOffset += index_count;
+            importer_data.VertexOffset += mesh.VertexCount;
+            importer_data.IndexOffset += mesh.IndexCount;
         }
     }
 
     void RapidobjImporter::ExtractMaterials(const rapidobj::Result& result, ImporterData& importer_data)
     {
         static constexpr float OPAQUENESS_THRESHOLD = 0.05f;
-        const uint32_t         number_of_materials  = static_cast<uint32_t>(result.materials.size());
 
-        ZENGINE_CORE_INFO(fmt::format("Processing {} materials", number_of_materials).c_str());
+        // Handle case where no materials exist
+        if (result.materials.empty())
+        {
+            MeshMaterial& default_material = importer_data.Scene.Materials.emplace_back();
+            default_material.AlbedoColor   = ZEngine::Rendering::gpuvec4{0.7f, 0.7f, 0.7f, 1.0f};
+            default_material.AmbientColor  = ZEngine::Rendering::gpuvec4{0.2f, 0.2f, 0.2f, 1.0f};
+            default_material.SpecularColor = ZEngine::Rendering::gpuvec4{0.5f, 0.5f, 0.5f, 1.0f};
+            default_material.EmissiveColor = ZEngine::Rendering::gpuvec4{0.0f, 0.0f, 0.0f, 1.0f};
+            default_material.Factors       = ZEngine::Rendering::gpuvec4{0.0f, 0.0f, 0.0f, 0.0f};
+            importer_data.Scene.MaterialNames.push_back("<default material>");
+            return;
+        }
 
-        // Pre-allocate space
+        const uint32_t number_of_materials = static_cast<uint32_t>(result.materials.size());
         importer_data.Scene.Materials.reserve(number_of_materials);
         importer_data.Scene.MaterialNames.reserve(number_of_materials);
 
-        // Helper function to convert Float3 to vec4
         auto toVec4 = [](const rapidobj::Float3& rgb, float alpha = 1.0f) -> ZEngine::Rendering::gpuvec4 {
             return ZEngine::Rendering::gpuvec4{std::clamp(rgb[0], 0.0f, 1.0f), std::clamp(rgb[1], 0.0f, 1.0f), std::clamp(rgb[2], 0.0f, 1.0f), std::clamp(alpha, 0.0f, 1.0f)};
         };
 
-        // Process each material
+        // Process materials
         for (uint32_t mat_idx = 0; mat_idx < number_of_materials; ++mat_idx)
         {
             const auto&   obj_material = result.materials[mat_idx];
             MeshMaterial& material     = importer_data.Scene.Materials.emplace_back();
 
-            // Store material name
-            std::string material_name = obj_material.name.empty() ? fmt::format("<unnamed material {}>", mat_idx) : obj_material.name;
-            importer_data.Scene.MaterialNames.push_back(std::move(material_name));
+            importer_data.Scene.MaterialNames.push_back(obj_material.name.empty() ? fmt::format("<unnamed material {}>", mat_idx) : obj_material.name);
 
-            // Convert material properties
             material.AmbientColor  = toVec4(obj_material.ambient);
             material.AlbedoColor   = toVec4(obj_material.diffuse);
             material.SpecularColor = toVec4(obj_material.specular);
             material.EmissiveColor = toVec4(obj_material.emission);
 
-            // Handle transparency/opacity
             float opacity      = obj_material.dissolve;
             material.Factors.x = (opacity < 1.0f) ? std::clamp(1.0f - opacity, 0.0f, 1.0f) : 0.0f;
-            if (material.Factors.x >= (1.0f - OPAQUENESS_THRESHOLD))
-            {
-                material.Factors.x = 0.0f;
-            }
 
-            // Handle transmission filter
             float transmission = std::max({obj_material.transmittance[0], obj_material.transmittance[1], obj_material.transmittance[2]});
             if (transmission > 0.0f)
             {
@@ -280,7 +286,6 @@ namespace Tetragrama::Importers
                 material.Factors.z = 0.5f;
             }
 
-            // Handle shininess and illumination model
             material.Factors.y = std::clamp(obj_material.shininess / 1000.0f, 0.0f, 1.0f);
             material.Factors.w = static_cast<float>(obj_material.illum) / 10.0f;
 
@@ -292,31 +297,22 @@ namespace Tetragrama::Importers
             material.OpacityMap  = 0xFFFFFFFF;
         }
 
-        // Map materials to shapes
+        // Map each material in the shapes to individual nodes
         for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
         {
             const auto& shape = result.shapes[shape_idx];
 
-            if (!shape.mesh.material_ids.empty())
+            // Assign all materials used by the shape to individual nodes
+            for (size_t material_idx = 0; material_idx < shape.mesh.material_ids.size(); ++material_idx)
             {
-                std::vector<size_t> material_counts(number_of_materials, 0);
-                for (int32_t mat_id : shape.mesh.material_ids)
+                int32_t mat_id = shape.mesh.material_ids[material_idx];
+                if (mat_id >= 0 && static_cast<size_t>(mat_id) < result.materials.size())
                 {
-                    if (mat_id >= 0 && static_cast<size_t>(mat_id) < material_counts.size())
-                    {
-                        material_counts[mat_id]++;
-                    }
-                }
-
-                auto most_frequent = std::max_element(material_counts.begin(), material_counts.end());
-                if (most_frequent != material_counts.end())
-                {
-                    size_t material_id = std::distance(material_counts.begin(), most_frequent);
                     for (const auto& [node_id, mesh_idx] : importer_data.Scene.NodeMeshes)
                     {
                         if (mesh_idx == shape_idx)
                         {
-                            importer_data.Scene.NodeMaterials[node_id] = static_cast<uint32_t>(material_id);
+                            importer_data.Scene.NodeMaterials[node_id] = static_cast<uint32_t>(mat_id);
                         }
                     }
                 }
@@ -324,52 +320,32 @@ namespace Tetragrama::Importers
         }
     }
 
-    int RapidobjImporter::GenerateFileIndex(std::vector<std::string>& data, std::string_view filename)
-    {
-        auto find = std::find(std::begin(data), std::end(data), filename);
-        if (find != std::end(data))
-        {
-            return std::distance(std::begin(data), find);
-        }
-
-        data.push_back(filename.data());
-        return (data.size() - 1);
-    }
-
     void RapidobjImporter::ExtractTextures(const rapidobj::Result& result, ImporterData& importer_data)
     {
         if (result.materials.empty())
         {
-            ZENGINE_CORE_INFO("No materials found for texture extraction");
+            ZENGINE_CORE_INFO("No materials found for texture extraction.");
             return;
         }
 
         const uint32_t number_of_materials = static_cast<uint32_t>(result.materials.size());
         ZENGINE_CORE_INFO(fmt::format("Processing textures for {} materials", number_of_materials).c_str());
 
-        // Helper function to process texture paths and generate file index
+        // Helper function to process texture paths and generate file indices
         auto processTexturePath = [this, &importer_data](const std::string& texname, const std::string& type) -> uint32_t {
             if (texname.empty())
             {
-                ZENGINE_CORE_INFO(fmt::format("No {} texture specified", type));
+                ZENGINE_CORE_INFO(fmt::format("No {} texture specified.", type));
                 return 0xFFFFFFFF; // Invalid texture index
             }
 
-            // Normalize and resolve the path relative to the base directory
-            std::filesystem::path texture_path = texname;
-            if (!texture_path.is_absolute())
-            {
-                texture_path = m_base_dir / texture_path;
-            }
+            ZENGINE_CORE_INFO(fmt::format("Found texname: {}", texname));
 
-            if (!std::filesystem::exists(texture_path))
-            {
-                ZENGINE_CORE_INFO(fmt::format("Warning: {} texture not found at path: {}", type, texture_path.string()));
-                return 0xFFFFFFFF; // Invalid texture index
-            }
+            std::string normalized_path = texname;
+            std::replace(normalized_path.begin(), normalized_path.end(), '\\', '/');
 
-            ZENGINE_CORE_INFO(fmt::format("Found {} texture: {}", type, texture_path.string()));
-            return GenerateFileIndex(importer_data.Scene.Files, texname);
+            ZENGINE_CORE_INFO(fmt::format("Found {} texture: {}", type, normalized_path));
+            return GenerateFileIndex(importer_data.Scene.Files, normalized_path);
         };
 
         for (uint32_t mat_idx = 0; mat_idx < number_of_materials; ++mat_idx)
@@ -384,27 +360,21 @@ namespace Tetragrama::Importers
                                   obj_material.name.empty() ? fmt::format("<unnamed material {}>", mat_idx) : obj_material.name)
                                   .c_str());
 
-            // Diffuse/Albedo texture
-            ZENGINE_CORE_INFO(fmt::format("Raw texname value: {}", obj_material.diffuse_texname));
-            material.AlbedoMap = processTexturePath(obj_material.diffuse_texname, "albedo");
-
-            // Specular texture
-            ZENGINE_CORE_INFO(fmt::format("Raw texname value: {}", obj_material.specular_texname));
+            // Process standard textures
+            material.AlbedoMap   = processTexturePath(obj_material.diffuse_texname, "albedo");
             material.SpecularMap = processTexturePath(obj_material.specular_texname, "specular");
-
-            // Emissive texture
             material.EmissiveMap = processTexturePath(obj_material.emissive_texname, "emissive");
 
-            // Normal/Bump map
+            // Handle multiple normal map definitions
             material.NormalMap = !obj_material.bump_texname.empty()           ? processTexturePath(obj_material.bump_texname, "bump")
                                  : !obj_material.normal_texname.empty()       ? processTexturePath(obj_material.normal_texname, "normal")
                                  : !obj_material.displacement_texname.empty() ? processTexturePath(obj_material.displacement_texname, "displacement as normal")
                                                                               : 0xFFFFFFFF;
 
-            // Opacity/Alpha texture
+            // Process opacity texture
             material.OpacityMap = processTexturePath(obj_material.alpha_texname, "opacity");
 
-            // Process additional textures (PBR, unsupported types)
+            // Handle additional textures (e.g., PBR maps)
             ProcessAdditionalTextures(obj_material, material);
 
             // Validate texture assignments
@@ -413,6 +383,7 @@ namespace Tetragrama::Importers
 
         ZENGINE_CORE_INFO(fmt::format("Total unique textures processed: {}", importer_data.Scene.Files.size()).c_str());
     }
+
     void RapidobjImporter::ProcessAdditionalTextures(const rapidobj::Material& obj_material, MeshMaterial& material)
     {
         // Process ambient occlusion texture if available
@@ -465,132 +436,112 @@ namespace Tetragrama::Importers
             ZENGINE_CORE_INFO("Set default normal map intensity factor");
         }
     }
-    bool RapidobjImporter::ValidateFileExists(const std::string& filepath)
+    int RapidobjImporter::GenerateFileIndex(std::vector<std::string>& data, std::string_view filename)
     {
-        std::ifstream file(filepath);
-        return file.good();
+        auto find = std::find(std::begin(data), std::end(data), filename);
+        if (find != std::end(data))
+        {
+            return std::distance(std::begin(data), find);
+        }
+
+        data.push_back(filename.data());
+        return (data.size() - 1);
     }
 
     void RapidobjImporter::CreateHierarchyScene(const rapidobj::Result& result, ImporterData& importer_data)
     {
         if (result.shapes.empty())
         {
-            ZENGINE_CORE_INFO("No shapes found in the OBJ file for hierarchy creation.");
+            ZENGINE_CORE_INFO("No shapes found in the OBJ file.");
             return;
         }
 
+        TraverseNode(result, &importer_data.Scene, "filename", -1, 0);
+    }
+
+    void RapidobjImporter::TraverseNode(const rapidobj::Result& result, SceneRawData* const scene, const std::string& nodeName, int parent_node_id, int depth_level)
+    {
         // Create root node
-        auto root_node_id                           = SceneRawData::AddNode(&importer_data.Scene, -1, 0);
-        importer_data.Scene.NodeNames[root_node_id] = importer_data.Scene.Names.size();
-        importer_data.Scene.Names.push_back("Root");
-        importer_data.Scene.GlobalTransformCollection[root_node_id] = glm::mat4(1.0f);
-        importer_data.Scene.LocalTransformCollection[root_node_id]  = glm::mat4(1.0f);
+        auto root_id              = SceneRawData::AddNode(scene, parent_node_id, depth_level);
+        scene->NodeNames[root_id] = scene->Names.size();
+        scene->Names.push_back(!nodeName.empty() ? nodeName : "<unnamed node>");
+        scene->GlobalTransformCollection[root_id] = glm::mat4(1.0f);
+        scene->LocalTransformCollection[root_id]  = glm::mat4(1.0f);
 
-        // Group shapes by material and calculate shape bounding boxes
-        struct MaterialGroup
+        if (depth_level == 0)
         {
-            std::string         name;
-            std::vector<size_t> shape_indices;
-            int32_t             material_id{-1};
-            glm::vec3           min_bounds{std::numeric_limits<float>::max()};
-            glm::vec3           max_bounds{std::numeric_limits<float>::lowest()};
-        };
+            // Create mesh group node
+            auto mesh_group_id              = SceneRawData::AddNode(scene, root_id, depth_level + 1);
+            scene->NodeNames[mesh_group_id] = scene->Names.size();
+            scene->Names.push_back(nodeName + "_Mesh1_Model");
+            scene->GlobalTransformCollection[mesh_group_id] = glm::mat4(1.0f);
+            scene->LocalTransformCollection[mesh_group_id]  = glm::mat4(1.0f);
 
-        std::map<int32_t, MaterialGroup> material_groups;
+            // First, organize shapes by their materials
+            std::map<int32_t, std::vector<size_t>> material_to_shapes;
 
-        for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
-        {
-            const auto& shape               = result.shapes[shape_idx];
-            int32_t     primary_material_id = -1;
-
-            // Determine primary material
-            if (!shape.mesh.material_ids.empty())
+            // Group shapes by material
+            for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
             {
+                const auto& shape = result.shapes[shape_idx];
+
+                // Find the dominant material for this shape
                 std::map<int32_t, size_t> material_counts;
                 for (int32_t mat_id : shape.mesh.material_ids)
                 {
-                    material_counts[mat_id]++;
+                    if (mat_id >= 0 && mat_id < static_cast<int32_t>(result.materials.size()))
+                    {
+                        material_counts[mat_id]++;
+                    }
                 }
 
-                auto most_frequent = std::max_element(material_counts.begin(), material_counts.end(), [](const auto& p1, const auto& p2) {
-                    return p1.second < p2.second;
-                });
-
-                if (most_frequent != material_counts.end())
+                int32_t primary_material_id = -1;
+                if (!material_counts.empty())
                 {
+                    auto most_frequent  = std::max_element(material_counts.begin(), material_counts.end(), [](const auto& p1, const auto& p2) {
+                        return p1.second < p2.second;
+                    });
                     primary_material_id = most_frequent->first;
                 }
+
+                // Group shapes by their primary material
+                material_to_shapes[primary_material_id].push_back(shape_idx);
+                ZENGINE_CORE_INFO(fmt::format("Shape {} assigned to material {}", shape_idx, primary_material_id).c_str());
             }
 
-            // Assign to material group
-            auto& group       = material_groups[primary_material_id];
-            group.material_id = primary_material_id;
-            group.shape_indices.push_back(shape_idx);
-
-            if (group.name.empty())
+            // Create nodes for each material group
+            for (const auto& [material_id, shape_indices] : material_to_shapes)
             {
-                group.name = (primary_material_id >= 0 && primary_material_id < static_cast<int32_t>(result.materials.size())) ? result.materials[primary_material_id].name
-                                                                                                                               : "<default material>";
-            }
-
-            // Calculate shape bounds
-            for (const auto& index : shape.mesh.indices)
-            {
-                if (index.position_index >= 0 && index.position_index * 3 + 2 < result.attributes.positions.size())
+                for (size_t shape_idx : shape_indices)
                 {
-                    glm::vec3 position(
-                        result.attributes.positions[index.position_index * 3],
-                        result.attributes.positions[index.position_index * 3 + 1],
-                        result.attributes.positions[index.position_index * 3 + 2]);
-                    group.min_bounds = glm::min(group.min_bounds, position);
-                    group.max_bounds = glm::max(group.max_bounds, position);
+                    const auto& shape             = result.shapes[shape_idx];
+                    auto        sub_node_id       = SceneRawData::AddNode(scene, mesh_group_id, depth_level + 2);
+                    scene->NodeNames[sub_node_id] = scene->Names.size();
+
+                    // Get material name
+                    std::string material_name;
+                    if (material_id >= 0 && material_id < static_cast<int32_t>(result.materials.size()))
+                    {
+                        material_name = !result.materials[material_id].name.empty() ? result.materials[material_id].name : fmt::format("material_{}", material_id);
+
+                        ZENGINE_CORE_INFO(fmt::format("Creating node with material: {} (ID: {})", material_name, material_id).c_str());
+                    }
+                    else
+                    {
+                        material_name = "<default material>";
+                    }
+
+                    scene->Names.push_back(material_name);
+                    scene->NodeMeshes[sub_node_id]                = static_cast<uint32_t>(shape_idx);
+                    scene->NodeMaterials[sub_node_id]             = static_cast<uint32_t>(material_id >= 0 ? material_id : 0);
+                    scene->GlobalTransformCollection[sub_node_id] = glm::mat4(1.0f);
+                    scene->LocalTransformCollection[sub_node_id]  = glm::mat4(1.0f);
+
+                    ZENGINE_CORE_INFO(fmt::format("Created node for shape {} with material {}", shape_idx, material_id).c_str());
                 }
             }
+
+            ZENGINE_CORE_INFO(fmt::format("Created hierarchy with {} material groups", material_to_shapes.size()).c_str());
         }
-
-        // Create material group nodes
-        for (const auto& [material_id, group] : material_groups)
-        {
-            auto material_node_id                           = SceneRawData::AddNode(&importer_data.Scene, root_node_id, 1);
-            importer_data.Scene.NodeNames[material_node_id] = importer_data.Scene.Names.size();
-            importer_data.Scene.Names.push_back(fmt::format("Material_Group_{}", group.name));
-
-            glm::vec3 group_center = (group.max_bounds + group.min_bounds) * 0.5f;
-            glm::vec3 group_scale  = group.max_bounds - group.min_bounds;
-
-            // Construct translation matrix
-            glm::mat4 translation_matrix = glm::mat4(1.0f);
-            translation_matrix[3]        = glm::vec4(group_center, 1.0f); // Set translation vector
-
-            // Construct scaling matrix
-            glm::mat4 scaling_matrix = glm::mat4(1.0f);
-            scaling_matrix[0][0]     = group_scale.x; // Scale X
-            scaling_matrix[1][1]     = group_scale.y; // Scale Y
-            scaling_matrix[2][2]     = group_scale.z; // Scale Z
-
-            // Combine scaling and translation into a single transform
-            glm::mat4 group_transform = scaling_matrix * translation_matrix;
-
-            // Assign transforms
-            importer_data.Scene.GlobalTransformCollection[material_node_id] = group_transform;
-            importer_data.Scene.LocalTransformCollection[material_node_id]  = group_transform;
-
-            // Create shape nodes
-            for (size_t shape_idx : group.shape_indices)
-            {
-                const auto& shape         = result.shapes[shape_idx];
-                auto        shape_node_id = SceneRawData::AddNode(&importer_data.Scene, material_node_id, 2);
-
-                importer_data.Scene.NodeNames[shape_node_id] = importer_data.Scene.Names.size();
-                importer_data.Scene.Names.push_back(!shape.name.empty() ? shape.name : fmt::format("Shape_{}", shape_idx));
-
-                importer_data.Scene.NodeMeshes[shape_node_id]    = static_cast<uint32_t>(shape_idx);
-                importer_data.Scene.NodeMaterials[shape_node_id] = static_cast<uint32_t>(material_id >= 0 ? material_id : 0);
-            }
-        }
-
-        ZENGINE_CORE_INFO(fmt::format("Created scene hierarchy with {} material groups and {} shapes.", material_groups.size(), result.shapes.size()).c_str());
-        // ValidateSceneHierarchy(importer_data.Scene);
     }
-
 } // namespace Tetragrama::Importers
