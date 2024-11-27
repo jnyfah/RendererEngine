@@ -2,7 +2,6 @@
 
 #include <IAssetImporter.h>
 #include <rapidobj/include/rapidobj/rapidobj.hpp>
-#include <filesystem> // Add this for path handling
 
 using namespace ZEngine::Helpers;
 using namespace ZEngine::Rendering::Meshes;
@@ -31,15 +30,12 @@ namespace Tetragrama::Importers
         };
 
     private:
-        // Core processing functions
         void PreprocessMesh(rapidobj::Result& result);
         void ExtractMeshes(const rapidobj::Result& result, ImporterData& importer_data);
         void ExtractMaterials(const rapidobj::Result& result, ImporterData& importer_data);
         void ExtractTextures(const rapidobj::Result& result, ImporterData& importer_data);
         void CreateHierarchyScene(const rapidobj::Result& result, ImporterData& importer_data);
-
-        // Helper functions
-        int GenerateFileIndex(std::vector<std::string>& data, std::string_view filename);
+        int  GenerateFileIndex(std::vector<std::string>& data, std::string_view filename);
     };
 } // namespace Tetragrama::Importers
 
@@ -50,7 +46,6 @@ namespace std
     {
         size_t operator()(const Tetragrama::Importers::RapidobjImporter::VertexData& v) const noexcept
         {
-            // Better hash combining function
             size_t seed         = 0;
             auto   hash_combine = [&seed](size_t hash) {
                 seed ^= hash + 0x9e3779b9 + (seed << 6) + (seed >> 2);
