@@ -124,7 +124,7 @@ namespace Tetragrama::Importers
         // Generate texture coordinates if they don't exist
         if (result.attributes.texcoords.empty())
         {
-            ZENGINE_CORE_INFO("Generating default UV coordinates...");
+            REPORT_LOG("Generating default UV coordinates...");
 
             glm::vec3 min_pos(std::numeric_limits<float>::max());
             glm::vec3 max_pos(std::numeric_limits<float>::lowest());
@@ -263,7 +263,6 @@ namespace Tetragrama::Importers
             return ZEngine::Rendering::gpuvec4{std::clamp(rgb[0], 0.0f, 1.0f), std::clamp(rgb[1], 0.0f, 1.0f), std::clamp(rgb[2], 0.0f, 1.0f), std::clamp(alpha, 0.0f, 1.0f)};
         };
 
-        // Process materials
         for (uint32_t mat_idx = 0; mat_idx < number_of_materials; ++mat_idx)
         {
             const auto&   obj_material = result.materials[mat_idx];
@@ -296,55 +295,29 @@ namespace Tetragrama::Importers
             material.EmissiveMap = 0xFFFFFFFF;
             material.OpacityMap  = 0xFFFFFFFF;
         }
-
-        // Map each material in the shapes to individual nodes
-        for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
-        {
-            const auto& shape = result.shapes[shape_idx];
-
-            // Assign all materials used by the shape to individual nodes
-            for (size_t material_idx = 0; material_idx < shape.mesh.material_ids.size(); ++material_idx)
-            {
-                int32_t mat_id = shape.mesh.material_ids[material_idx];
-                if (mat_id >= 0 && static_cast<size_t>(mat_id) < result.materials.size())
-                {
-                    for (const auto& [node_id, mesh_idx] : importer_data.Scene.NodeMeshes)
-                    {
-                        if (mesh_idx == shape_idx)
-                        {
-                            importer_data.Scene.NodeMaterials[node_id] = static_cast<uint32_t>(mat_id);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     void RapidobjImporter::ExtractTextures(const rapidobj::Result& result, ImporterData& importer_data)
     {
         if (result.materials.empty())
         {
-            ZENGINE_CORE_INFO("No materials found for texture extraction.");
+            REPORT_LOG("No materials found for texture extraction.");
             return;
         }
 
         const uint32_t number_of_materials = static_cast<uint32_t>(result.materials.size());
-        ZENGINE_CORE_INFO(fmt::format("Processing textures for {} materials", number_of_materials).c_str());
+        REPORT_LOG(fmt::format("Processing textures for {} materials", number_of_materials).c_str());
 
-        // Helper function to process texture paths and generate file indices
         auto processTexturePath = [this, &importer_data](const std::string& texname, const std::string& type) -> uint32_t {
             if (texname.empty())
             {
-                ZENGINE_CORE_INFO(fmt::format("No {} texture specified.", type));
-                return 0xFFFFFFFF; // Invalid texture index
+                REPORT_LOG(fmt::format("No {} texture specified.", type));
+                return 0xFFFFFFFF;
             }
-
-            ZENGINE_CORE_INFO(fmt::format("Found texname: {}", texname));
 
             std::string normalized_path = texname;
             std::replace(normalized_path.begin(), normalized_path.end(), '\\', '/');
 
-            ZENGINE_CORE_INFO(fmt::format("Found {} texture: {}", type, normalized_path));
             return GenerateFileIndex(importer_data.Scene.Files, normalized_path);
         };
 
@@ -353,89 +326,19 @@ namespace Tetragrama::Importers
             const auto& obj_material = result.materials[mat_idx];
             auto&       material     = importer_data.Scene.Materials[mat_idx];
 
-            ZENGINE_CORE_INFO(fmt::format(
-                                  "Processing textures for material {}/{}: {}",
-                                  mat_idx + 1,
-                                  number_of_materials,
-                                  obj_material.name.empty() ? fmt::format("<unnamed material {}>", mat_idx) : obj_material.name)
-                                  .c_str());
-
-            // Process standard textures
             material.AlbedoMap   = processTexturePath(obj_material.diffuse_texname, "albedo");
             material.SpecularMap = processTexturePath(obj_material.specular_texname, "specular");
             material.EmissiveMap = processTexturePath(obj_material.emissive_texname, "emissive");
 
-            // Handle multiple normal map definitions
             material.NormalMap = !obj_material.bump_texname.empty()           ? processTexturePath(obj_material.bump_texname, "bump")
                                  : !obj_material.normal_texname.empty()       ? processTexturePath(obj_material.normal_texname, "normal")
                                  : !obj_material.displacement_texname.empty() ? processTexturePath(obj_material.displacement_texname, "displacement as normal")
                                                                               : 0xFFFFFFFF;
 
-            // Process opacity texture
             material.OpacityMap = processTexturePath(obj_material.alpha_texname, "opacity");
-
-            // Handle additional textures (e.g., PBR maps)
-            ProcessAdditionalTextures(obj_material, material);
-
-            // Validate texture assignments
-            ValidateTextureAssignments(material);
-        }
-
-        ZENGINE_CORE_INFO(fmt::format("Total unique textures processed: {}", importer_data.Scene.Files.size()).c_str());
-    }
-
-    void RapidobjImporter::ProcessAdditionalTextures(const rapidobj::Material& obj_material, MeshMaterial& material)
-    {
-        // Process ambient occlusion texture if available
-        if (!obj_material.ambient_texname.empty())
-        {
-            ZENGINE_CORE_INFO("Ambient occlusion texture found but not supported in current material format");
-        }
-
-        // Check for PBR textures
-        bool has_pbr_textures = false;
-        if (!obj_material.roughness_texname.empty())
-        {
-            has_pbr_textures = true;
-            ZENGINE_CORE_INFO("Roughness texture found");
-        }
-        if (!obj_material.metallic_texname.empty())
-        {
-            has_pbr_textures = true;
-            ZENGINE_CORE_INFO("Metallic texture found");
-        }
-        if (!obj_material.sheen_texname.empty())
-        {
-            has_pbr_textures = true;
-            ZENGINE_CORE_INFO("Sheen texture found");
-        }
-
-        if (has_pbr_textures)
-        {
-            ZENGINE_CORE_INFO("Note: Some PBR textures found but not supported in current material format");
         }
     }
 
-    void RapidobjImporter::ValidateTextureAssignments(MeshMaterial& material)
-    {
-        // Check for invalid texture combinations
-        if (material.OpacityMap != 0xFFFFFFFF)
-        {
-            // If we have an opacity map, ensure the material is marked as having transparency
-            if (material.Factors.x == 0.0f)
-            {
-                material.Factors.x = 0.5f;
-                ZENGINE_CORE_INFO("Adjusted material transparency factor due to opacity map");
-            }
-        }
-
-        // Check for normal map without proper factors
-        if (material.NormalMap != 0xFFFFFFFF && material.Factors.w == 0.0f)
-        {
-            material.Factors.w = 1.0f; // Default normal map intensity
-            ZENGINE_CORE_INFO("Set default normal map intensity factor");
-        }
-    }
     int RapidobjImporter::GenerateFileIndex(std::vector<std::string>& data, std::string_view filename)
     {
         auto find = std::find(std::begin(data), std::end(data), filename);
@@ -452,96 +355,66 @@ namespace Tetragrama::Importers
     {
         if (result.shapes.empty())
         {
-            ZENGINE_CORE_INFO("No shapes found in the OBJ file.");
             return;
         }
 
-        TraverseNode(result, &importer_data.Scene, "filename", -1, 0);
-    }
+        // Create root node ??
+        auto root_id                           = SceneRawData::AddNode(&importer_data.Scene, -1, 0);
+        importer_data.Scene.NodeNames[root_id] = importer_data.Scene.Names.size();
+        importer_data.Scene.Names.push_back("Root");
+        importer_data.Scene.GlobalTransformCollection[root_id] = glm::mat4(1.0f);
+        importer_data.Scene.LocalTransformCollection[root_id]  = glm::mat4(1.0f);
 
-    void RapidobjImporter::TraverseNode(const rapidobj::Result& result, SceneRawData* const scene, const std::string& nodeName, int parent_node_id, int depth_level)
-    {
-        // Create root node
-        auto root_id              = SceneRawData::AddNode(scene, parent_node_id, depth_level);
-        scene->NodeNames[root_id] = scene->Names.size();
-        scene->Names.push_back(!nodeName.empty() ? nodeName : "<unnamed node>");
-        scene->GlobalTransformCollection[root_id] = glm::mat4(1.0f);
-        scene->LocalTransformCollection[root_id]  = glm::mat4(1.0f);
+        // Create model node ??
+        auto model_node_id                           = SceneRawData::AddNode(&importer_data.Scene, -1, 1);
+        importer_data.Scene.NodeNames[model_node_id] = importer_data.Scene.Names.size();
+        importer_data.Scene.Names.push_back("model_Mesh1_Model");
+        importer_data.Scene.GlobalTransformCollection[model_node_id] = glm::mat4(1.0f);
+        importer_data.Scene.LocalTransformCollection[model_node_id]  = glm::mat4(1.0f);
 
-        if (depth_level == 0)
+        // Collect all unique materials across all shapes
+        std::map<int32_t, std::vector<size_t>> material_to_shapes;
+
+        for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
         {
-            // Create mesh group node
-            auto mesh_group_id              = SceneRawData::AddNode(scene, root_id, depth_level + 1);
-            scene->NodeNames[mesh_group_id] = scene->Names.size();
-            scene->Names.push_back(nodeName + "_Mesh1_Model");
-            scene->GlobalTransformCollection[mesh_group_id] = glm::mat4(1.0f);
-            scene->LocalTransformCollection[mesh_group_id]  = glm::mat4(1.0f);
+            const auto&       shape = result.shapes[shape_idx];
+            std::set<int32_t> shape_materials;
 
-            // First, organize shapes by their materials
-            std::map<int32_t, std::vector<size_t>> material_to_shapes;
-
-            // Group shapes by material
-            for (size_t shape_idx = 0; shape_idx < result.shapes.size(); ++shape_idx)
+            for (int32_t mat_id : shape.mesh.material_ids)
             {
-                const auto& shape = result.shapes[shape_idx];
-
-                // Find the dominant material for this shape
-                std::map<int32_t, size_t> material_counts;
-                for (int32_t mat_id : shape.mesh.material_ids)
-                {
-                    if (mat_id >= 0 && mat_id < static_cast<int32_t>(result.materials.size()))
-                    {
-                        material_counts[mat_id]++;
-                    }
-                }
-
-                int32_t primary_material_id = -1;
-                if (!material_counts.empty())
-                {
-                    auto most_frequent  = std::max_element(material_counts.begin(), material_counts.end(), [](const auto& p1, const auto& p2) {
-                        return p1.second < p2.second;
-                    });
-                    primary_material_id = most_frequent->first;
-                }
-
-                // Group shapes by their primary material
-                material_to_shapes[primary_material_id].push_back(shape_idx);
-                ZENGINE_CORE_INFO(fmt::format("Shape {} assigned to material {}", shape_idx, primary_material_id).c_str());
+                shape_materials.insert(mat_id);
             }
 
-            // Create nodes for each material group
-            for (const auto& [material_id, shape_indices] : material_to_shapes)
+            for (int32_t mat_id : shape_materials)
             {
-                for (size_t shape_idx : shape_indices)
-                {
-                    const auto& shape             = result.shapes[shape_idx];
-                    auto        sub_node_id       = SceneRawData::AddNode(scene, mesh_group_id, depth_level + 2);
-                    scene->NodeNames[sub_node_id] = scene->Names.size();
-
-                    // Get material name
-                    std::string material_name;
-                    if (material_id >= 0 && material_id < static_cast<int32_t>(result.materials.size()))
-                    {
-                        material_name = !result.materials[material_id].name.empty() ? result.materials[material_id].name : fmt::format("material_{}", material_id);
-
-                        ZENGINE_CORE_INFO(fmt::format("Creating node with material: {} (ID: {})", material_name, material_id).c_str());
-                    }
-                    else
-                    {
-                        material_name = "<default material>";
-                    }
-
-                    scene->Names.push_back(material_name);
-                    scene->NodeMeshes[sub_node_id]                = static_cast<uint32_t>(shape_idx);
-                    scene->NodeMaterials[sub_node_id]             = static_cast<uint32_t>(material_id >= 0 ? material_id : 0);
-                    scene->GlobalTransformCollection[sub_node_id] = glm::mat4(1.0f);
-                    scene->LocalTransformCollection[sub_node_id]  = glm::mat4(1.0f);
-
-                    ZENGINE_CORE_INFO(fmt::format("Created node for shape {} with material {}", shape_idx, material_id).c_str());
-                }
+                material_to_shapes[mat_id].push_back(shape_idx);
             }
+        }
 
-            ZENGINE_CORE_INFO(fmt::format("Created hierarchy with {} material groups", material_to_shapes.size()).c_str());
+        // Create a node for each material
+        for (const auto& [material_id, shape_indices] : material_to_shapes)
+        {
+            auto material_node_id                           = SceneRawData::AddNode(&importer_data.Scene, model_node_id, 2);
+            importer_data.Scene.NodeNames[material_node_id] = importer_data.Scene.Names.size();
+
+            std::string material_name = material_id < static_cast<int32_t>(importer_data.Scene.MaterialNames.size()) ? importer_data.Scene.MaterialNames[material_id]
+                                                                                                                     : fmt::format("material_{}", material_id);
+
+            importer_data.Scene.Names.push_back(material_name);
+
+            // Create child nodes for each shape using this material
+            for (size_t shape_idx : shape_indices)
+            {
+                auto shape_node_id                           = SceneRawData::AddNode(&importer_data.Scene, material_node_id, 3);
+                importer_data.Scene.NodeNames[shape_node_id] = importer_data.Scene.Names.size();
+                importer_data.Scene.Names.push_back(fmt::format("{}_{}", material_name, shape_idx));
+
+                importer_data.Scene.NodeMeshes[shape_node_id]    = static_cast<uint32_t>(shape_idx);
+                importer_data.Scene.NodeMaterials[shape_node_id] = static_cast<uint32_t>(material_id);
+
+                importer_data.Scene.GlobalTransformCollection[shape_node_id] = glm::mat4(1.0f);
+                importer_data.Scene.LocalTransformCollection[shape_node_id]  = glm::mat4(1.0f);
+            }
         }
     }
 } // namespace Tetragrama::Importers

@@ -22,7 +22,7 @@ namespace Tetragrama::Importers
         {
             float px, py, pz; // Position
             float nx, ny, nz; // Normal
-            float u, v;       // Texture 
+            float u, v;       // Texture
 
             bool operator==(const VertexData& other) const noexcept
             {
@@ -39,13 +39,9 @@ namespace Tetragrama::Importers
         void CreateHierarchyScene(const rapidobj::Result& result, ImporterData& importer_data);
 
         // Helper functions
-        void TraverseNode(const rapidobj::Result& result, SceneRawData* const scene, const std::string& nodeName, int parent_node_id, int depth_level);
-        int  GenerateFileIndex(std::vector<std::string>& data, std::string_view filename);
-        void ValidateTextureAssignments(MeshMaterial& material);
-        void ProcessAdditionalTextures(const rapidobj::Material& obj_material, MeshMaterial& material);
+        int GenerateFileIndex(std::vector<std::string>& data, std::string_view filename);
     };
 } // namespace Tetragrama::Importers
-
 
 namespace std
 {
@@ -73,10 +69,3 @@ namespace std
         }
     };
 } // namespace std
-
-
-// Todo
-// 1. replace zengine core with log!
-// remove unnecassy comments
-// if materials is empty ??
-// does texture need full file path ??
