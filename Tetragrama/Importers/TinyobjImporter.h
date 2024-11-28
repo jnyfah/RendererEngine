@@ -1,7 +1,7 @@
 #pragma once
 
 #include <IAssetImporter.h>
-#include <rapidobj/include/rapidobj/rapidobj.hpp>
+#include <tinyobjloader/tiny_obj_loader.h>
 
 using namespace ZEngine::Helpers;
 using namespace ZEngine::Rendering::Meshes;
@@ -9,11 +9,11 @@ using namespace ZEngine::Rendering::Scenes;
 
 namespace Tetragrama::Importers
 {
-    class RapidobjImporter : public IAssetImporter
+    class TInyobjImporter : public IAssetImporter
     {
     public:
-        RapidobjImporter();
-        virtual ~RapidobjImporter();
+        TInyobjImporter();
+        virtual ~TInyobjImporter();
         std::future<void> ImportAsync(std::string_view filename, ImportConfiguration config = {}) override;
 
         // To aid in Vertex deduplication
@@ -30,11 +30,10 @@ namespace Tetragrama::Importers
         };
 
     private:
-        void PreprocessMesh(rapidobj::Result& result);
-        void ExtractMeshes(const rapidobj::Result& result, ImporterData& importer_data);
-        void ExtractMaterials(const rapidobj::Result& result, ImporterData& importer_data);
-        void ExtractTextures(const rapidobj::Result& result, ImporterData& importer_data);
-        void CreateHierarchyScene(const rapidobj::Result& result, ImporterData& importer_data);
+        void ExtractMeshes(const tinyobj::ObjReader& reader, ImporterData& importer_data);
+        void ExtractMaterials(const tinyobj::ObjReader& reader, ImporterData& importer_data);
+        void ExtractTextures(const tinyobj::ObjReader& reader, ImporterData& importer_data);
+        void CreateHierarchyScene(const tinyobj::ObjReader& reader, ImporterData& importer_data);
         int  GenerateFileIndex(std::vector<std::string>& data, std::string_view filename);
     };
 } // namespace Tetragrama::Importers
@@ -42,9 +41,9 @@ namespace Tetragrama::Importers
 namespace std
 {
     template <>
-    struct hash<Tetragrama::Importers::RapidobjImporter::VertexData>
+    struct hash<Tetragrama::Importers::TInyobjImporter::VertexData>
     {
-        size_t operator()(const Tetragrama::Importers::RapidobjImporter::VertexData& v) const noexcept
+        size_t operator()(const Tetragrama::Importers::TInyobjImporter::VertexData& v) const noexcept
         {
             size_t seed         = 0;
             auto   hash_combine = [&seed](size_t hash) {
