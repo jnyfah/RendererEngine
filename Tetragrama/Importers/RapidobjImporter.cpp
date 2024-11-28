@@ -157,6 +157,83 @@ namespace Tetragrama::Importers
             REPORT_LOG("Cannot triangulate model...")
         }
 
+        // vertex deduplication
+        for (auto& shape : result.shapes)
+        {
+            std::unordered_map<VertexData, uint32_t> unique_vertices;
+            std::vector<rapidobj::Index>             new_indices;
+            new_indices.reserve(shape.mesh.indices.size());
+
+            const size_t num_indices = shape.mesh.indices.size();
+            for (size_t i = 0; i < num_indices; ++i)
+            {
+                const auto& index = shape.mesh.indices[i];
+                VertexData  vertex{};
+
+                // Position
+                vertex.px = result.attributes.positions[index.position_index * 3];
+                vertex.py = result.attributes.positions[index.position_index * 3 + 1];
+                vertex.pz = result.attributes.positions[index.position_index * 3 + 2];
+
+                // Normal
+                vertex.nx = result.attributes.normals[index.normal_index * 3];
+                vertex.ny = result.attributes.normals[index.normal_index * 3 + 1];
+                vertex.nz = result.attributes.normals[index.normal_index * 3 + 2];
+
+                // UV
+                vertex.u = result.attributes.texcoords[index.texcoord_index * 2];
+                vertex.v = result.attributes.texcoords[index.texcoord_index * 2 + 1];
+
+                auto it = unique_vertices.find(vertex);
+                if (it != unique_vertices.end())
+                {
+                    rapidobj::Index new_index;
+                    new_index.position_index = it->second;
+                    new_index.normal_index   = it->second;
+                    new_index.texcoord_index = it->second;
+                    new_indices.push_back(new_index);
+                }
+                else
+                {
+                    uint32_t new_index_value = static_cast<uint32_t>(unique_vertices.size());
+                    unique_vertices[vertex]  = new_index_value;
+
+                    rapidobj::Index new_index;
+                    new_index.position_index = new_index_value;
+                    new_index.normal_index   = new_index_value;
+                    new_index.texcoord_index = new_index_value;
+                    new_indices.push_back(new_index);
+                }
+            }
+
+            rapidobj::Array<float> new_positions(unique_vertices.size() * 3);
+            rapidobj::Array<float> new_normals(unique_vertices.size() * 3);
+            rapidobj::Array<float> new_texcoords(unique_vertices.size() * 2);
+
+            size_t vert_idx = 0;
+            for (const auto& [vert, idx] : unique_vertices)
+            {
+                new_positions[idx * 3]     = vert.px;
+                new_positions[idx * 3 + 1] = vert.py;
+                new_positions[idx * 3 + 2] = vert.pz;
+
+                new_normals[idx * 3]     = vert.nx;
+                new_normals[idx * 3 + 1] = vert.ny;
+                new_normals[idx * 3 + 2] = vert.nz;
+
+                new_texcoords[idx * 2]     = vert.u;
+                new_texcoords[idx * 2 + 1] = vert.v;
+            }
+
+            rapidobj::Array<rapidobj::Index> final_indices(new_indices.size());
+            memcpy(final_indices.data(), new_indices.data(), new_indices.size() * sizeof(rapidobj::Index));
+
+            // Update shape and attributes
+            result.attributes.positions = std::move(new_positions);
+            result.attributes.normals   = std::move(new_normals);
+            result.attributes.texcoords = std::move(new_texcoords);
+            shape.mesh.indices          = std::move(final_indices);
+        }
         REPORT_LOG("Preprocessing complete.");
     }
 
@@ -175,56 +252,28 @@ namespace Tetragrama::Importers
 
         for (size_t shape_idx = 0; shape_idx < shapes.size(); ++shape_idx)
         {
-            const auto& shape = shapes[shape_idx];
+            const auto&  shape      = shapes[shape_idx];
+            const size_t face_count = shape.mesh.indices.size() / 3;
 
-            std::unordered_map<VertexData, uint32_t> unique_vertices;
-            const size_t                             face_count = shape.mesh.indices.size() / 3;
-
-            for (size_t f = 0; f < face_count; ++f)
+            for (const auto& index : shape.mesh.indices)
             {
-                for (size_t v = 0; v < 3; ++v)
-                {
-                    const auto& index = shape.mesh.indices[f * 3 + v];
-                    VertexData  vertex{};
+                importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3]);
+                importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3 + 1]);
+                importer_data.Scene.Vertices.push_back(attributes.positions[index.position_index * 3 + 2]);
 
-                    const size_t pos_idx = index.position_index * 3;
-                    vertex.px            = attributes.positions[pos_idx];
-                    vertex.py            = attributes.positions[pos_idx + 1];
-                    vertex.pz            = attributes.positions[pos_idx + 2];
+                importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3]);
+                importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3 + 1]);
+                importer_data.Scene.Vertices.push_back(attributes.normals[index.normal_index * 3 + 2]);
 
-                    const size_t norm_idx = index.normal_index * 3;
-                    vertex.nx             = attributes.normals[norm_idx];
-                    vertex.ny             = attributes.normals[norm_idx + 1];
-                    vertex.nz             = attributes.normals[norm_idx + 2];
+                importer_data.Scene.Vertices.push_back(attributes.texcoords[index.texcoord_index * 2]);
+                importer_data.Scene.Vertices.push_back(attributes.texcoords[index.texcoord_index * 2 + 1]);
 
-                    const size_t tex_idx = index.texcoord_index * 2;
-                    vertex.u             = attributes.texcoords[tex_idx];
-                    vertex.v             = attributes.texcoords[tex_idx + 1];
-
-                    // Add to unique_vertices or reuse
-                    auto     it = unique_vertices.find(vertex);
-                    uint32_t vertex_index;
-
-                    if (it != unique_vertices.end())
-                    {
-                        vertex_index = it->second;
-                    }
-                    else
-                    {
-                        vertex_index            = static_cast<uint32_t>(unique_vertices.size());
-                        unique_vertices[vertex] = vertex_index;
-
-                        importer_data.Scene.Vertices.insert(
-                            importer_data.Scene.Vertices.end(), {vertex.px, vertex.py, vertex.pz, vertex.nx, vertex.ny, vertex.nz, vertex.u, vertex.v});
-                    }
-
-                    importer_data.Scene.Indices.push_back(importer_data.VertexOffset + vertex_index);
-                }
+                importer_data.Scene.Indices.push_back(importer_data.VertexOffset++);
             }
 
             MeshVNext& mesh           = importer_data.Scene.Meshes.emplace_back();
-            mesh.VertexCount          = static_cast<uint32_t>(unique_vertices.size());
-            mesh.VertexOffset         = importer_data.VertexOffset;
+            mesh.VertexCount          = static_cast<uint32_t>(shape.mesh.indices.size());
+            mesh.VertexOffset         = importer_data.VertexOffset - mesh.VertexCount;
             mesh.VertexUnitStreamSize = sizeof(float) * (3 + 3 + 2);
             mesh.StreamOffset         = mesh.VertexUnitStreamSize * mesh.VertexOffset;
             mesh.IndexOffset          = importer_data.IndexOffset;
@@ -233,7 +282,6 @@ namespace Tetragrama::Importers
             mesh.IndexStreamOffset    = mesh.IndexUnitStreamSize * mesh.IndexOffset;
             mesh.TotalByteSize        = (mesh.VertexCount * mesh.VertexUnitStreamSize) + (mesh.IndexCount * mesh.IndexUnitStreamSize);
 
-            importer_data.VertexOffset += mesh.VertexCount;
             importer_data.IndexOffset += mesh.IndexCount;
         }
     }
@@ -366,7 +414,7 @@ namespace Tetragrama::Importers
         importer_data.Scene.LocalTransformCollection[root_id]  = glm::mat4(1.0f);
 
         // Create model node ??
-        auto model_node_id                           = SceneRawData::AddNode(&importer_data.Scene, -1, 1);
+        auto model_node_id                           = SceneRawData::AddNode(&importer_data.Scene, root_id, 1);
         importer_data.Scene.NodeNames[model_node_id] = importer_data.Scene.Names.size();
         importer_data.Scene.Names.push_back("model_Mesh1_Model");
         importer_data.Scene.GlobalTransformCollection[model_node_id] = glm::mat4(1.0f);
