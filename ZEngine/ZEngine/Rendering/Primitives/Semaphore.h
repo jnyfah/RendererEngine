@@ -2,6 +2,11 @@
 #include <Helpers/IntrusivePtr.h>
 #include <vulkan/vulkan.h>
 
+namespace ZEngine::Hardwares
+{
+    struct VulkanDevice;
+}
+
 namespace ZEngine::Rendering::Primitives
 {
     enum class SemaphoreState
@@ -13,14 +18,16 @@ namespace ZEngine::Rendering::Primitives
 
     struct Semaphore : public Helpers::RefCounted
     {
-        Semaphore();
+        Semaphore(Hardwares::VulkanDevice* const device);
         ~Semaphore();
-        void        Wait(const uint64_t value, const uint64_t timeout = UINT64_MAX);
-        void        Signal(const uint64_t value);
-        VkSemaphore GetHandle() const;
 
-        void           SetState(SemaphoreState state);
-        SemaphoreState GetState() const;
+        Hardwares::VulkanDevice* Device = nullptr;
+        void                     Wait(const uint64_t value, const uint64_t timeout = UINT64_MAX);
+        void                     Signal(const uint64_t value);
+        VkSemaphore              GetHandle() const;
+
+        void                     SetState(SemaphoreState state);
+        SemaphoreState           GetState() const;
 
     private:
         SemaphoreState m_semaphore_state{SemaphoreState::Idle};

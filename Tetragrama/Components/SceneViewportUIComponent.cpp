@@ -1,5 +1,4 @@
 #include <pch.h>
-#include <Layers/UILayer.h>
 #include <MessageToken.h>
 #include <Messengers/Messenger.h>
 #include <SceneViewportUIComponent.h>
@@ -30,53 +29,52 @@ namespace Tetragrama::Components
     {
         if ((m_viewport_size.x != m_content_region_available_size.x) || (m_viewport_size.y != m_content_region_available_size.y))
         {
-            m_viewport_size           = m_content_region_available_size;
-            m_request_renderer_resize = true;
+            if (!m_is_resizing)
+            {
+                m_is_resizing = true;
+            }
+
+            m_viewport_size    = m_content_region_available_size;
+            m_idle_frame_count = 0;
         }
-
-        if (m_request_renderer_resize)
+        else if (m_is_resizing)
         {
-            GraphicRenderer::SetViewportSize(m_viewport_size.x, m_viewport_size.y);
-            m_refresh_texture_handle = true;
-
-            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<std::pair<float, float>>>(
-                EDITOR_RENDER_LAYER_SCENE_REQUEST_RESIZE, Messengers::GenericMessage<std::pair<float, float>>{{m_viewport_size.x, m_viewport_size.y}});
-
-            m_request_renderer_resize = false;
+            m_idle_frame_count++;
+            if (m_idle_frame_count >= m_idle_frame_threshold)
+            {
+                m_is_resizing             = false;
+                m_request_renderer_resize = true;
+            }
         }
 
         if (m_is_window_hovered && m_is_window_focused)
         {
-            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(
-                EDITOR_RENDER_LAYER_SCENE_REQUEST_FOCUS, Messengers::GenericMessage<bool>{true});
+            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(EDITOR_RENDER_LAYER_SCENE_REQUEST_FOCUS, Messengers::GenericMessage<bool>{true});
         }
         else
         {
-            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(
-                EDITOR_RENDER_LAYER_SCENE_REQUEST_UNFOCUS, Messengers::GenericMessage<bool>{false});
+            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(EDITOR_RENDER_LAYER_SCENE_REQUEST_UNFOCUS, Messengers::GenericMessage<bool>{false});
         }
 
         if (m_is_window_clicked && m_is_window_hovered && m_is_window_focused)
         {
-            auto mouse_position = ImGui::GetMousePos();
-            mouse_position.x -= m_viewport_bounds[0].x;
-            mouse_position.y -= m_viewport_bounds[0].y;
+            auto mouse_position   = ImGui::GetMousePos();
+            mouse_position.x     -= m_viewport_bounds[0].x;
+            mouse_position.y     -= m_viewport_bounds[0].y;
 
-            auto mouse_bounded_x = static_cast<int>(mouse_position.x);
-            auto mouse_bounded_y = static_cast<int>(mouse_position.y);
-            auto message_data    = std::array{mouse_bounded_x, mouse_bounded_y};
-            Messengers::IMessenger::SendAsync<Components::UIComponent, Messengers::ArrayValueMessage<int, 2>>(
-                EDITOR_COMPONENT_SCENEVIEWPORT_CLICKED, Messengers::ArrayValueMessage<int, 2>{message_data});
+            auto mouse_bounded_x  = static_cast<int>(mouse_position.x);
+            auto mouse_bounded_y  = static_cast<int>(mouse_position.y);
+            auto message_data     = std::array{mouse_bounded_x, mouse_bounded_y};
+            Messengers::IMessenger::SendAsync<Components::UIComponent, Messengers::ArrayValueMessage<int, 2>>(EDITOR_COMPONENT_SCENEVIEWPORT_CLICKED, Messengers::ArrayValueMessage<int, 2>{message_data});
         }
     }
 
-    void SceneViewportUIComponent::Render()
+    void SceneViewportUIComponent::Render(ZEngine::Rendering::Renderers::GraphicRenderer* const renderer, ZEngine::Rendering::Buffers::CommandBuffer* const command_buffer)
     {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::Begin(m_name.c_str(), (m_can_be_closed ? &m_can_be_closed : NULL), ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove);
+        ImGui::Begin(Name.c_str(), (CanBeClosed ? &CanBeClosed : NULL), ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove);
 
-        auto viewport_offset = ImGui::GetCursorPos();
-
+        auto viewport_offset            = ImGui::GetCursorPos();
         m_content_region_available_size = ImGui::GetContentRegionAvail();
         m_is_window_focused             = ImGui::IsWindowFocused();
         m_is_window_hovered             = ImGui::IsWindowHovered();
@@ -85,21 +83,21 @@ namespace Tetragrama::Components
         // Scene texture representation
         if (!m_scene_texture || m_refresh_texture_handle)
         {
-            m_scene_texture          = GraphicRenderer::GetImguiFrameOutput();
+            m_scene_texture          = renderer->GetImguiFrameOutput();
             m_refresh_texture_handle = false;
         }
 
         ImGui::Image(m_scene_texture, m_viewport_size, ImVec2(0, 1), ImVec2(1, 0));
         // ViewPort bound computation
-        ImVec2 viewport_windows_size = ImGui::GetWindowSize();
-        ImVec2 minimum_bound         = ImGui::GetWindowPos();
-        minimum_bound.x += viewport_offset.x;
-        minimum_bound.y += viewport_offset.y;
+        ImVec2 viewport_windows_size  = ImGui::GetWindowSize();
+        ImVec2 minimum_bound          = ImGui::GetWindowPos();
+        minimum_bound.x              += viewport_offset.x;
+        minimum_bound.y              += viewport_offset.y;
 
-        ImVec2 maximum_bound = {minimum_bound.x + viewport_windows_size.x, minimum_bound.y + viewport_windows_size.y};
+        ImVec2 maximum_bound          = {minimum_bound.x + viewport_windows_size.x, minimum_bound.y + viewport_windows_size.y};
 
-        m_viewport_bounds[0] = minimum_bound;
-        m_viewport_bounds[1] = maximum_bound;
+        m_viewport_bounds[0]          = minimum_bound;
+        m_viewport_bounds[1]          = maximum_bound;
 
         // ImGuizmo configuration
         ImGuizmo::SetRect(minimum_bound.x, minimum_bound.y, m_viewport_size.x, m_viewport_size.y);
@@ -109,6 +107,20 @@ namespace Tetragrama::Components
         ImGui::End();
 
         ImGui::PopStyleVar();
+
+        if (m_request_renderer_resize)
+        {
+            renderer->EnqueuedResizeRequests.Emplace({.Width = (uint32_t) m_viewport_size.x, .Height = (uint32_t) m_viewport_size.y});
+            m_refresh_texture_handle = true;
+
+            Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<std::pair<float, float>>>(
+                EDITOR_RENDER_LAYER_SCENE_REQUEST_RESIZE,
+                Messengers::GenericMessage<std::pair<float, float>>{
+                {m_viewport_size.x, m_viewport_size.y}
+            });
+
+            m_request_renderer_resize = false;
+        }
     }
 
     std::future<void> SceneViewportUIComponent::SceneViewportClickedMessageHandlerAsync(Messengers::ArrayValueMessage<int, 2>& e)
@@ -120,13 +132,11 @@ namespace Tetragrama::Components
 
     std::future<void> SceneViewportUIComponent::SceneViewportFocusedMessageHandlerAsync(Messengers::GenericMessage<bool>& e)
     {
-        co_await Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(
-            EDITOR_RENDER_LAYER_SCENE_REQUEST_FOCUS, Messengers::GenericMessage<bool>{e});
+        co_await Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(EDITOR_RENDER_LAYER_SCENE_REQUEST_FOCUS, Messengers::GenericMessage<bool>{e});
     }
 
     std::future<void> SceneViewportUIComponent::SceneViewportUnfocusedMessageHandlerAsync(Messengers::GenericMessage<bool>& e)
     {
-        co_await Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(
-            EDITOR_RENDER_LAYER_SCENE_REQUEST_UNFOCUS, Messengers::GenericMessage<bool>{e});
+        co_await Messengers::IMessenger::SendAsync<Windows::Layers::Layer, Messengers::GenericMessage<bool>>(EDITOR_RENDER_LAYER_SCENE_REQUEST_UNFOCUS, Messengers::GenericMessage<bool>{e});
     }
 } // namespace Tetragrama::Components

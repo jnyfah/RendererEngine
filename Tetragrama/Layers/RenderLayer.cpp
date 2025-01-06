@@ -25,8 +25,7 @@ namespace Tetragrama::Layers
         GraphicScene::Initialize();
 
         m_editor_camera_controller = CreateRef<EditorCameraController>(150.0, 0.f, 45.f);
-        Messengers::IMessenger::SendAsync<Components::UIComponent, Messengers::GenericMessage<Ref<EditorCameraController>>>(
-            EDITOR_RENDER_LAYER_CAMERA_CONTROLLER_AVAILABLE, Messengers::GenericMessage<Ref<EditorCameraController>>{m_editor_camera_controller});
+        Messengers::IMessenger::SendAsync<Components::UIComponent, Messengers::GenericMessage<Ref<EditorCameraController>>>(EDITOR_RENDER_LAYER_CAMERA_CONTROLLER_AVAILABLE, Messengers::GenericMessage<Ref<EditorCameraController>>{m_editor_camera_controller});
     }
 
     void RenderLayer::Deinitialize()
@@ -46,17 +45,17 @@ namespace Tetragrama::Layers
         return false;
     }
 
-    void RenderLayer::Render()
+    void RenderLayer::Render(ZEngine::Rendering::Renderers::GraphicRenderer* const renderer, ZEngine::Rendering::Buffers::CommandBuffer* const command_buffer)
     {
         auto camera = m_editor_camera_controller->GetCamera();
-        GraphicRenderer::DrawScene(camera, GraphicScene::GetRawData());
+        renderer->DrawScene(command_buffer, camera, GraphicScene::GetRawData());
     }
 
     std::future<void> RenderLayer::SceneRequestResizeMessageHandlerAsync(Messengers::GenericMessage<std::pair<float, float>>& message)
     {
         std::unique_lock lock(m_message_handler_mutex);
 
-        const auto& value = message.GetValue();
+        const auto&      value = message.GetValue();
         m_editor_camera_controller->SetViewport(value.first, value.second);
         co_return;
     }

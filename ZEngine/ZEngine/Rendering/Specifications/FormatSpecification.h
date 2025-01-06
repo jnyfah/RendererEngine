@@ -14,6 +14,7 @@ namespace ZEngine::Rendering::Specifications
         R16G16B16A16_SFLOAT,
         R32G32B32A32_SFLOAT,
         R32G32_SFLOAT,
+        R32G32B32_SFLOAT,
         DEPTH16_UNORM,
         DEPTH16_UNORM_S8_UINT,
         DEPTH24_UNORM_S8_UINT,
@@ -28,17 +29,7 @@ namespace ZEngine::Rendering::Specifications
      */
     static uint32_t BytePerChannelMap[] = {0u, 4u, 4u, (4u * (sizeof(float) / 2)), (4u * sizeof(float))};
 
-    static VkFormat ImageFormatMap[] = {
-        VK_FORMAT_UNDEFINED,
-        VK_FORMAT_R8G8B8A8_UNORM,
-        VK_FORMAT_R8G8B8A8_SRGB,
-        VK_FORMAT_R16G16B16A16_SFLOAT,
-        VK_FORMAT_R32G32B32A32_SFLOAT,
-        VK_FORMAT_R32G32_SFLOAT,
-        VK_FORMAT_D16_UNORM,
-        VK_FORMAT_D16_UNORM_S8_UINT,
-        VK_FORMAT_D24_UNORM_S8_UINT,
-        VK_FORMAT_D32_SFLOAT_S8_UINT};
+    static VkFormat ImageFormatMap[]    = {VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_D16_UNORM, VK_FORMAT_D16_UNORM_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT};
 
     enum class LoadOperation : uint32_t
     {
@@ -139,11 +130,5 @@ namespace ZEngine::Rendering::Specifications
         CUBE_COMPATIBLE_BIT
     };
 
-    static VkImageCreateFlagBits ImageCreateFlagMap[]{
-        VkImageCreateFlagBits(0),
-        VK_IMAGE_CREATE_SPARSE_BINDING_BIT,
-        VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT,
-        VK_IMAGE_CREATE_SPARSE_ALIASED_BIT,
-        VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT,
-        VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT};
+    static VkImageCreateFlagBits ImageCreateFlagMap[]{VkImageCreateFlagBits(0), VK_IMAGE_CREATE_SPARSE_BINDING_BIT, VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT, VK_IMAGE_CREATE_SPARSE_ALIASED_BIT, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT};
 } // namespace ZEngine::Rendering::Specifications
